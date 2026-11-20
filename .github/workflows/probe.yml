@@ -1,0 +1,12 @@
+name: Probe macOS runner
+on:
+  workflow_dispatch: {}
+jobs:
+  mac:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - run: |
+          echo "macos runner acquired"
+          sw_vers
+          xcodebuild -version
