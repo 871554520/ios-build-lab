@@ -1,0 +1,76 @@
+name: Build DevilutionX (Diablo I) iOS unsigned IPA
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Clone DevilutionX
+        run: |
+          set -eux
+          git clone --depth 1 --recurse-submodules --shallow-submodules \
+            https://github.com/diasurgical/devilutionX.git src
+          cd src && git describe --always || git rev-parse --short HEAD
+
+      - name: Install cmake
+        run: |
+          set -eux
+          brew install cmake
+          cmake --version | head -1
+          xcodebuild -version
+
+      - name: Configure (iOS device, arm64)
+        run: |
+          set -eux
+          cd src
+          cmake -S . -B build-ios \
+            -DCMAKE_TOOLCHAIN_FILE=CMake/platforms/ios.toolchain.cmake \
+            -DPLATFORM=OS64 \
+            -DENABLE_BITCODE=0 \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: |
+          set -eux
+          cd src
+          cmake --build build-ios -j $(sysctl -n hw.physicalcpu) --config Release
+
+      - name: Package IPA
+        run: |
+          set -eux
+          cd src/build-ios
+          APP=$(find . -maxdepth 2 -name "*.app" -type d | head -1)
+          echo "app: $APP"
+          rm -rf Payload && mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry devilutionx.ipa Payload
+          ls -lh devilutionx.ipa
+
+      - name: Verify IPA structure
+        run: |
+          set -eux
+          cd src/build-ios
+          python3 - <<'PY'
+          import zipfile, plistlib, struct, sys
+          z = zipfile.ZipFile('devilutionx.ipa')
+          names = z.namelist()
+          apps = sorted({n.split('/')[1] for n in names if n.startswith('Payload/') and n.count('/') >= 2})
+          assert apps, 'no .app bundle'
+          app = apps[0]
+          info = plistlib.loads(z.read(f'Payload/{app}/Info.plist'))
+          exe = info['CFBundleExecutable']
+          raw = z.read(f'Payload/{app}/{exe}')[:8]
+          magic = struct.unpack('<I', raw[:4])[0]
+          assert magic in (0xFEEDFACF, 0xCAFEBABE), f'not Mach-O: {magic:08x}'
+          print('OK', app, info.get('CFBundleIdentifier'), info.get('CFBundleShortVersionString'),
+                f'{len(z.read(f"Payload/{app}/{exe}"))/1048576:.1f} MB')
+          PY
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: devilutionx-ios-ipa
+          path: src/build-ios/devilutionx.ipa
+          if-no-files-found: error
